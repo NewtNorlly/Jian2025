@@ -628,6 +628,15 @@ hr.rule {
     grid-column: 2 / span 11;
   }
 
+  .ch-body > .tw--wide {
+    grid-column: 1 / span 12;
+  }
+
+  .ch-body h2.h2in,
+  .ch-body h3,
+  .ch-body h4,
+  .ch-body h5,
+  .ch-body h6,
   hr.rule,
   .colophon p {
     grid-column: 3 / span 10;
