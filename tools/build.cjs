@@ -99,6 +99,25 @@ function linkLabel(u) {
   }
 }
 
+/* 抓取到的网页标题（由 tools/crawl-titles.cjs 生成） */
+let TITLES_CACHE;
+function loadTitles() {
+  if (TITLES_CACHE !== undefined) return TITLES_CACHE;
+  try {
+    TITLES_CACHE = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'titles.json'), 'utf8'));
+  } catch {
+    TITLES_CACHE = {};
+  }
+  return TITLES_CACHE;
+}
+
+function titleOf(rawHref) {
+  const titles = loadTitles();
+  const href = String(rawHref || '').replace(/&amp;/g, '&');
+  const hit = titles[href] || titles[href.split('#')[0]];
+  return hit && hit.title ? hit.title : '';
+}
+
 function fmt(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
@@ -246,12 +265,16 @@ function buildSite(source) {
           `点击即打开原文。</p>`
       )
     );
+    const covered = data.links.filter((u) => titleOf(u)).length;
+    const showTitle = covered / data.links.length >= 0.25;
     const rows = data.links
       .map((u, i) => {
         const n = String(i + 1).padStart(4, '0');
+        const t = titleOf(u);
         return (
-          `<tr><td class="num">${n}</td><td>` +
-          `<a href="${esc(u)}" title="${esc(u)}" target="_blank" rel="noopener noreferrer">` +
+          `<tr><td class="num">${n}</td>` +
+          (showTitle ? `<td class="lg-title">${t ? esc(t) : '<span class="lg-none">—</span>'}</td>` : '') +
+          `<td><a href="${esc(u)}" title="${esc(u)}" target="_blank" rel="noopener noreferrer">` +
           `${esc(linkLabel(u))}</a></td></tr>`
         );
       })
@@ -259,7 +282,7 @@ function buildSite(source) {
     out.push(
       html(
         `<div class="tw tw--wide"><table class="linkreg">` +
-          `<thead><tr><th class="num">序号</th><th>链接</th></tr></thead>` +
+          `<thead><tr><th class="num">序号</th>` + (showTitle ? '<th>标题</th>' : '') + `<th>链接</th></tr></thead>` +
           `<tbody>${rows}</tbody></table></div>`
       )
     );
@@ -410,6 +433,33 @@ function buildSite(source) {
     .replace(/ style="text-align:right"/g, ' class="num"')
     .replace(/ style="text-align:center"/g, ' class="ctr"');
   bodyHtml = bodyHtml.split('%%BR%%').join('<br>');
+
+  /* 原图不在仓库里（迁到了 Redmi1105），图片一律不输出：
+     可点的图片链接换成抓取到的文章标题，其余图片换成图版标记。 */
+  const nakedSet = new Set();
+  bodyHtml = bodyHtml.replace(/<a\b([^>]*)>\s*<img\b[^>]*>\s*<\/a>/g, (m, attrs) => {
+    const href = (attrs.match(/href="([^"]*)"/) || [])[1] || '';
+    if (/^https?:/i.test(href)) nakedSet.add(href.replace(/&amp;/g, '&'));
+    const t = titleOf(href);
+    return t ? `<a${attrs}>${esc(t)}</a>` : `<span class="ph" title="原图未随仓库发布">图版</span>`;
+  });
+  bodyHtml = bodyHtml.replace(/<a\b([^>]*)>\s*<\/a>/g, (m, attrs) => {
+    const href = (attrs.match(/href="([^"]*)"/) || [])[1] || '';
+    if (/^https?:/i.test(href)) nakedSet.add(href.replace(/&amp;/g, '&'));
+    return m;
+  });
+  bodyHtml = bodyHtml.replace(
+    /<img\b[^>]*>/g,
+    '<span class="ph" title="原图未随仓库发布">图版</span>'
+  );
+
+  try {
+    fs.writeFileSync(
+      path.join(ROOT, 'data', 'naked-links.json'),
+      JSON.stringify({ count: nakedSet.size, links: [...nakedSet] }, null, 0),
+      'utf8'
+    );
+  } catch {}
 
   /* --- 版式产物 --- */
   const vCss = hashOf(path.join(SITE, 'swiss.css'));

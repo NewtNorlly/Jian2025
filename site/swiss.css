@@ -538,6 +538,22 @@ tbody tr:hover td {
   padding-right: 20px;
 }
 
+.linkreg th:last-child,
+.linkreg td:last-child {
+  width: 46%;
+  padding-right: 0;
+}
+
+.linkreg .lg-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkreg .lg-none {
+  color: var(--ink-40);
+}
+
 .linkreg tbody tr:last-child td {
   border-bottom: 0;
 }
@@ -552,6 +568,17 @@ tbody tr:hover td {
 
 .linkreg tbody tr:hover a {
   border-bottom-color: var(--ink);
+}
+
+/* 原图未随仓库发布：行内图版标记 */
+.ph {
+  display: inline-block;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--ink-50);
+  border: 1px solid var(--rule);
+  padding: 0 0.5em;
+  vertical-align: 0.05em;
 }
 
 .linkreg tbody tr:hover td {
