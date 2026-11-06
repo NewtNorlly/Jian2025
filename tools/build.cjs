@@ -256,16 +256,20 @@ function buildSite(source) {
     if (!data) return;
     const title = '微信收藏文章链接表';
     const id = slug(`第10章 ${title}`);
+    const covered = data.links.filter((u) => titleOf(u)).length;
     openChapter({ key: 'ch-10', num: '10', title, id });
     out.push(
       html(
         `<p>本章数据取自工作簿 <code class="tok">${esc(data.source)}</code>，` +
           `共 ${fmt(data.links.length)} 条链接，按表格中的原始顺序排列，未做去重以外的任何改动。` +
           `每条链接在页面上的显示文字取 <code class="tok">__biz / mid / idx / sn</code> 四项，` +
-          `点击即打开原文。</p>`
+          `点击即打开原文。` +
+          (covered ?
+            `其中 ${fmt(covered)} 条的标题由抓取得到；其余标注 —，是微信对批量抓取的频率限制所致，可再跑一次 <code class="tok">tools/crawl-titles.cjs</code> 补齐。` :
+            '') +
+          `</p>`
       )
     );
-    const covered = data.links.filter((u) => titleOf(u)).length;
     const showTitle = covered / data.links.length >= 0.25;
     const rows = data.links
       .map((u, i) => {
@@ -402,7 +406,7 @@ function buildSite(source) {
       }
       out.push(
         html(
-          `<div class="tw${cols >= 7 ? ' tw--wide' : ''}" role="region" aria-label="数据表" tabindex="0"` +
+          `<div class="tw${cols >= 7 ? ' tw--wide' : ''}${cols === 2 ? ' tw--kv' : ''}" role="region" aria-label="数据表" tabindex="0"` +
             ` data-cols="${cols}" style="--c:${cols}">`
         )
       );

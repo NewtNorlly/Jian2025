@@ -23,11 +23,14 @@
 Jian2025-全库文本与数据总集.md     正文源文件
 data/微信收藏文章链接表.xlsx        第 10 章的数据源
 data/wechat-links.json            由上面那份表格导出的构建输入
+data/naked-links.json             构建时产出的「无文字链接」清单
+data/titles.json                  抓取到的网页标题（断点续爬的缓存）
 site/swiss.css                    样式
 site/app.js                       进度线 / 当前章 / 右缘刻度
 site/favicon.svg                  站点图标
 tools/build.cjs                   构建器：Markdown → _site/index.html
 tools/import-links.py             把链接表 xlsx 导出成 JSON
+tools/crawl-titles.cjs            批量抓网页标题（curl + 本地代理，流式截断）
 tools/serve.cjs                   本地预览服务器
 tools/shot.cjs                    无头 Chrome 截图（开发自用）
 tools/vendor/markdown-it.min.js   内置解析器（CI 无需 npm install）
@@ -45,6 +48,22 @@ Markdown 正文，由构建器在「附录 A」之前插入，数据来自 `data
 ```bash
 python tools/import-links.py "C:\\Users\\NewtN\\Desktop\\微信收藏文章链接表.xlsx"
 ```
+
+## 抓取网页标题
+
+链接登记表的「标题」列、以及正文里原本只有图片的链接文字，都由
+`data/titles.json` 提供，它由采集器生成：
+
+```bash
+node tools/crawl-titles.cjs --limit 20 --concurrency 3   # 先试 20 条
+node tools/crawl-titles.cjs --prune --minutes 18         # 跑 18 分钟
+```
+
+- **走本地代理**：微信对直连 IP 在十来次请求后会强制「环境异常」验证，走
+  `http://127.0.0.1:7890` 这样的代理出口可以规避；没有代理时加 `--proxy ""` 直连。
+- **流式截断**：文章页动辄 3.5MB，采到 `</head>` 或 320KB 就掐断连接，省流量。
+- **断点续爬**：已有标题的不再请求；失败记录用 `--prune` 清掉后可再来一轮。
+- 限流仍然存在：并发 4 时约 0.6 条/秒、成功率 85%；并发 8 反而会被封，别开太大。
 
 ## 本地使用
 

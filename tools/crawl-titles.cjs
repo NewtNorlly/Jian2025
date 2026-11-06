@@ -1,212 +1,175 @@
 'use strict';
 /**
- * 批量抓取网页标题（零依赖）
+ * 批量抓取网页标题（零依赖，curl 走本地代理）
  * ---------------------------------------------------------------
- * 抓两类地址：
- *   1. data/wechat-links.json        ——《微信收藏文章链接表》全部链接
- *   2. _site/index.html 里的空文本链接 —— 页面上没有可见文字的「光头链接」
+ * 为什么这么做：微信文章页对直连 IP 会在十来次请求后强制「环境异常」验证，
+ * 但对本地代理出口放行；而整篇文章动辄 3.5MB，只为取 <head> 里的标题，
+ * 所以用 curl 流式下载，读到 </head> 或 300KB 就掐断连接。
  *
- * 结果写进 data/titles.json（断点续爬，已抓过的不再请求）：
- *   { "url": { "title": "...", "site": "mp.weixin.qq.com", "status": 200, "at": "2026-11-07" } }
+ * 目标：
+ *   1. data/wechat-links.json   ——《微信收藏文章链接表》全部链接
+ *   2. data/naked-links.json    —— 页面上没有可见文字的「光头链接」
+ *
+ * 结果写入 data/titles.json（断点续爬）：
+ *   { "<url>": { "title": "...", "site": "mp.weixin.qq.com", "status": 200, "at": "2026-11-07" } }
  *
  * 用法：
- *   node tools/crawl-titles.cjs                 # 抓全部未完成的
- *   node tools/crawl-titles.cjs --limit 20      # 只抓 20 条，先试水
- *   node tools/crawl-titles.cjs --delay 3000    # 每条之间停 3 秒
- *   node tools/crawl-titles.cjs --prune         # 清掉验证页/失败记录后重抓
+ *   node tools/crawl-titles.cjs                     # 抓全部未完成的
+ *   node tools/crawl-titles.cjs --minutes 20        # 最多跑 20 分钟
+ *   node tools/crawl-titles.cjs --limit 50 --proxy "" --concurrency 1
+ *   node tools/crawl-titles.cjs --prune             # 清掉失败记录后重抓
  */
 
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const CACHE_PATH = path.join(ROOT, 'data', 'titles.json');
 const LINKS_PATH = path.join(ROOT, 'data', 'wechat-links.json');
-const HTML_PATH = path.join(ROOT, '_site', 'index.html');
+const NAKED_PATH = path.join(ROOT, 'data', 'naked-links.json');
 
-const argv = process.argv.slice(2);
-const flag = (name) => {
-  const i = argv.indexOf('--' + name);
-  return i >= 0 && (argv[i + 1] === undefined || argv[i + 1].startsWith('--')) ? true : i >= 0 ? argv[i + 1] : null;
+const argVal = (name, dflt) => {
+  const i = process.argv.indexOf('--' + name);
+  if (i < 0) return dflt;
+  const v = process.argv[i + 1];
+  return v === undefined || v.startsWith('--') ? true : v;
 };
-const DELAY = Number(flag('delay') || 2400);
-const LIMIT = Number(flag('limit') || 0) || Infinity;
-const TIMEOUT = Number(flag('timeout') || 20000);
-const PRUNE = argv.includes('--prune');
+const PROXY = argVal('proxy', 'http://127.0.0.1:7890');
+const CONCURRENCY = Number(argVal('concurrency', 3)) || 1;
+const MINUTES = Number(argVal('minutes', 0)) || 0;
+const LIMIT = Number(argVal('limit', 0)) || Infinity;
+const MAX_BYTES = Number(argVal('maxbytes', 0)) || 320000;
+const PRUNE = process.argv.includes('--prune');
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-
-/* ---------- 请求头池 + Cookie 罐 ---------- */
-const UA_POOL = [
-  ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', 'Windows'],
-  ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0', '"Microsoft Edge";v="130", "Chromium";v="130", "Not_A Brand";v="24"', 'Windows'],
-  ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', 'macOS'],
-  ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15', '', 'macOS'],
-  ['Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0', '', 'Windows'],
-  ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1', '', 'iOS'],
-  ['Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', 'Android'],
-  ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50(0x18003228) NetType/WIFI Language/zh_CN', '', 'iOS'],
-];
-const pick = (a) => a[Math.floor(Math.random() * a.length)];
-
-const JAR = new Map(); // host -> Map(name -> value)
-
-function jarFor(host) {
-  if (!JAR.has(host)) JAR.set(host, new Map());
-  return JAR.get(host);
-}
-
-function absorbCookies(res) {
-  let host = '';
-  try {
-    host = new URL(res.url).hostname;
-  } catch {
-    return;
-  }
-  const jar = jarFor(host);
-  const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
-  for (const raw of list || []) {
-    const [pair] = String(raw).split(';');
-    const idx = pair.indexOf('=');
-    if (idx < 1) continue;
-    const name = pair.slice(0, idx).trim();
-    const value = pair.slice(idx + 1).trim();
-    if (name && value) jar.set(name, value);
-  }
-}
-
-function cookieHeader(host) {
-  const jar = JAR.get(host);
-  if (!jar || !jar.size) return '';
-  return [...jar.entries()].map(([k, v]) => k + '=' + v).join('; ');
-}
-
-function buildHeaders(url) {
-  const [ua, chUa] = pick(UA_POOL);
-  const u = new URL(url);
-  const h = {
-    'user-agent': ua,
-    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'accept-encoding': 'gzip, deflate, br',
-    'upgrade-insecure-requests': '1',
-    'sec-fetch-dest': 'document',
-    'sec-fetch-mode': 'navigate',
-    'sec-fetch-site': 'none',
-    'sec-fetch-user': '?1',
-    'cache-control': 'max-age=0',
-    dnt: '1',
-  };
-  if (chUa) {
-    h['sec-ch-ua'] = chUa;
-    h['sec-ch-ua-mobile'] = /iPhone|Android/i.test(ua) ? '?1' : '?0';
-    h['sec-ch-ua-platform'] = '"' + (/Windows/i.test(ua) ? 'Windows' : /Macintosh/.test(ua) ? 'macOS' : /iPhone/.test(ua) ? 'iOS' : 'Android') + '"';
-  }
-  const ck = cookieHeader(u.hostname);
-  if (ck) h.cookie = ck;
-  return h;
-}
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const jitter = (base) => base + Math.floor(Math.random() * base * 0.6);
+const iso = () => new Date().toISOString().slice(0, 10);
+const hostOf = (u) => {
+  try {
+    return new URL(u).hostname;
+  } catch {
+    return '';
+  }
+};
 
-/* ---------- 1. 收集目标地址 ---------- */
+/* ---------- 目标地址 ---------- */
 function targets() {
   const set = new Set();
-  try {
-    const j = JSON.parse(fs.readFileSync(LINKS_PATH, 'utf8'));
-    for (const u of j.links || []) set.add(u);
-  } catch {}
-  try {
-    const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'naked-links.json'), 'utf8'));
-    for (const u of j.links || []) set.add(u);
-  } catch {}
-  try {
-    const html = fs.readFileSync(HTML_PATH, 'utf8');
-    const re = /<a\b([^>]*)>([\s\S]*?)<\/a>/g;
-    let m;
-    while ((m = re.exec(html))) {
-      const attrs = m[1];
-      const inner = m[2];
-      const text = inner.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-      if (text) continue;
-      const href = (attrs.match(/href="([^"]*)"/) || [])[1] || '';
-      if (/^https?:/i.test(href)) set.add(href.replace(/&amp;/g, '&'));
-    }
-  } catch {}
+  for (const f of [LINKS_PATH, NAKED_PATH]) {
+    try {
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      for (const u of j.links || []) set.add(u);
+    } catch {}
+  }
   return [...set];
 }
 
-/* ---------- 2. 标题提取 ---------- */
+/* ---------- 流式抓 <head> ---------- */
+function fetchHead(url) {
+  return new Promise((resolve) => {
+    const args = [
+      '-s',
+      '-L',
+      '-A',
+      UA,
+      '-H',
+      'Accept-Language: zh-CN,zh;q=0.9',
+      '--max-time',
+      '25',
+      '--connect-timeout',
+      '10',
+    ];
+    if (PROXY) args.push('-x', PROXY);
+    args.push(url);
+
+    let proc;
+    try {
+      proc = spawn('curl.exe', args, { windowsHide: true });
+    } catch (e) {
+      resolve({ ok: false, bytes: 0, html: '' });
+      return;
+    }
+
+    let buf = Buffer.alloc(0);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        proc.kill('SIGKILL');
+      } catch {}
+      resolve({ ok: true, bytes: buf.length, html: buf.toString('utf8') });
+    };
+
+    proc.stdout.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length >= MAX_BYTES) return finish();
+      if (buf.includes('</head>') || buf.includes('activity-name')) finish();
+    });
+    proc.stderr.on('data', () => {});
+    proc.on('close', finish);
+    proc.on('error', finish);
+  });
+}
+
+/* ---------- 标题提取 ---------- */
 const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
-function decodeEntities(s) {
-  return String(s)
+const decode = (s) =>
+  String(s)
     .replace(/&#(\d+);/g, (m, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&([a-z]+);/gi, (m, n) => ENT[n.toLowerCase()] ?? m);
-}
+
+const clean = (s) => decode(String(s).replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 
 function extractTitle(html) {
-  const clean = (s) =>
-    decodeEntities(String(s).replace(/<[^>]*>/g, ' '))
-      .replace(/\s+/g, ' ')
-      .trim();
-
+  if (!html) return '';
   const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']*)["']/i);
   if (og && clean(og[1])) return clean(og[1]);
-
   const h1 = html.match(/<h1[^>]*id=["']activity-name["'][^>]*>([\s\S]*?)<\/h1>/i);
   if (h1 && clean(h1[1])) return clean(h1[1]);
-
-  const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (t && clean(t[1])) {
-    // 去掉「标题-公众号名」这类后缀
-    return clean(t[1]).replace(/\s*[-|–—_]\s*(微信公众平台|微信公众号)\s*$/, '');
-  }
-
   const tw = html.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']*)["']/i);
   if (tw && clean(tw[1])) return clean(tw[1]);
-
+  const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (t && clean(t[1])) return clean(t[1]).replace(/\s*[-|–—_]\s*(微信公众平台|微信公众号)\s*$/, '');
   return '';
 }
 
-function isVerifyPage(html, title) {
-  if (title) return false;
-  if (html.length < 120000 && /环境异常|完成验证|去验证|verify_?code|该内容已被发布者删除|此内容因违规无法查看/.test(html)) return true;
-  return html.length < 20000;
-}
+const looksVerified = (html) =>
+  !extractTitle(html) &&
+  (/环境异常|完成验证|去验证/.test(html) || html.length < 60000);
 
-/* ---------- 3. 抓一条 ---------- */
-async function fetchTitle(url) {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), TIMEOUT);
-  try {
-    const res = await fetch(url, {
-      signal: ctl.signal,
-      redirect: 'follow',
-      headers: buildHeaders(url),
-    });
-    absorbCookies(res);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const html = buf.toString('utf8');
-    const title = extractTitle(html);
-    const verify = isVerifyPage(html, title);
-    return {
-      status: res.status,
-      title,
-      finalUrl: res.url,
-      verify,
-      bytes: buf.length,
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/* ---------- 4. 主流程 ---------- */
+/* ---------- 主流程 ---------- */
 async function main() {
+  // 代理可用性检查
+  if (PROXY) {
+    const ok = await new Promise((res) => {
+      const s = net.connect(Number(PROXY.split(':').pop() || 7890), '127.0.0.1');
+      const t = setTimeout(() => {
+        s.destroy();
+        res(false);
+      }, 1500);
+      s.once('connect', () => {
+        clearTimeout(t);
+        s.destroy();
+        res(true);
+      });
+      s.once('error', () => {
+        clearTimeout(t);
+        res(false);
+      });
+    });
+    if (!ok) {
+      console.log('代理不可用，改为直连（会被限流）');
+    } else {
+      console.log(`走代理 ${PROXY}，并发 ${CONCURRENCY}`);
+    }
+  }
+
   const all = targets();
   let cache = {};
   try {
@@ -222,88 +185,63 @@ async function main() {
       }
     }
     fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 0), 'utf8');
-    console.log(`清掉无标题记录 ${n} 条`);
+    console.log(`清掉失败记录 ${n} 条`);
   }
 
-  const todo = all.filter((u) => !(cache[u] && cache[u].title));
-  const queue = todo.slice(0, LIMIT === Infinity ? todo.length : LIMIT);
+  const todo = all.filter((u) => !(cache[u] && cache[u].title)).slice(0, LIMIT);
+  console.log(`目标 ${all.length} 条，已有标题 ${all.length - todo.length} 条，本轮 ${todo.length} 条`);
 
-  console.log(`目标 ${all.length} 条，已抓 ${all.length - todo.length} 条，本轮处理 ${queue.length} 条，间隔 ${DELAY}ms`);
-
+  const deadline = MINUTES ? Date.now() + MINUTES * 60000 : Infinity;
+  let idx = 0;
   let ok = 0;
-  let verifyHits = 0;
   let fail = 0;
-  let backoff = 0;
+  let verified = 0;
+  const started = Date.now();
 
-  for (let i = 0; i < queue.length; i++) {
-    const url = queue[i];
-    let attempt = 0;
-    let done = false;
+  const save = () => fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 0), 'utf8');
 
-    while (attempt < 3 && !done) {
-      attempt++;
-      try {
-        const r = await fetchTitle(url);
-        if (r.verify) {
-          verifyHits++;
-          backoff = Math.min(90000, backoff ? backoff * 2 : 10000);
-          if (attempt < 3) {
-            console.log(`  [验证页] 退避 ${Math.round(backoff / 1000)}s 后重试`);
-            await sleep(backoff);
-            continue;
-          }
-          cache[url] = { title: '', site: hostOf(url), status: r.status, at: today(), note: 'verify' };
-          fail++;
-          done = true;
-        } else if (r.title) {
-          cache[url] = {
-            title: r.title,
-            site: hostOf(url),
-            status: r.status,
-            at: today(),
-          };
-          backoff = 0;
-          ok++;
-          done = true;
-        } else {
-          cache[url] = { title: '', site: hostOf(url), status: r.status, at: today(), note: 'no-title' };
-          fail++;
-          done = true;
+  async function worker() {
+    while (idx < todo.length && Date.now() < deadline) {
+      const url = todo[idx++];
+      let got = '';
+      let status = 0;
+      for (let attempt = 0; attempt < 3 && !got; attempt++) {
+        const r = await fetchHead(url);
+        status = r.ok ? 200 : 0;
+        if (looksVerified(r.html)) {
+          verified++;
+          await sleep(1200 + Math.random() * 1800);
+          continue;
         }
-      } catch (e) {
-        if (attempt >= 3) {
-          cache[url] = { title: '', site: hostOf(url), status: 0, at: today(), note: String(e.message).slice(0, 60) };
-          fail++;
-          done = true;
-        } else {
-          await sleep(2000 * attempt);
-        }
+        got = extractTitle(r.html);
+        if (!got) await sleep(600);
       }
+      if (got) {
+        cache[url] = { title: got, site: hostOf(url), status, at: iso() };
+        ok++;
+      } else {
+        cache[url] = { title: '', site: hostOf(url), status, at: iso(), note: 'verify-or-empty' };
+        fail++;
+      }
+      if ((ok + fail) % 25 === 0) {
+        save();
+        const el = Math.round((Date.now() - started) / 1000);
+        const rate = (ok + fail) / Math.max(1, el);
+        console.log(
+          `进度 ${ok + fail}/${todo.length} · 成功 ${ok} · 失败 ${fail} · 验证页 ${verified} · ${rate.toFixed(2)} 条/秒`
+        );
+      }
+      await sleep(220 + Math.random() * 260);
     }
-
-    if ((i + 1) % 20 === 0 || i === queue.length - 1) {
-      fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 0), 'utf8');
-      const t = ok + fail > 0 ? Math.round((ok / (ok + fail)) * 100) : 0;
-      console.log(
-        `进度 ${i + 1}/${queue.length} · 成功 ${ok} · 失败 ${fail} · 验证页 ${verifyHits} · 成功率 ${t}% · 预计还需 ${Math.round(((queue.length - i - 1) * (DELAY * 1.3 + 900)) / 60000)} 分钟`
-      );
-    }
-
-    if (i < queue.length - 1) await sleep(jitter(DELAY));
   }
 
-  fs.writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 0), 'utf8');
-  console.log(`完成：成功 ${ok}，失败 ${fail}，验证页 ${verifyHits}。缓存 ${Object.keys(cache).length} 条 → data/titles.json`);
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  save();
+  console.log(
+    `完成：成功 ${ok}，失败 ${fail}，验证页 ${verified}，用时 ${Math.round((Date.now() - started) / 60000)} 分钟。` +
+      ` 缓存共 ${Object.keys(cache).length} 条 → data/titles.json`
+  );
 }
-
-const hostOf = (u) => {
-  try {
-    return new URL(u).hostname;
-  } catch {
-    return '';
-  }
-};
-const today = () => new Date().toISOString().slice(0, 10);
 
 main().catch((e) => {
   console.error('FATAL', e);

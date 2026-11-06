@@ -312,6 +312,13 @@ main {
   margin: 0 0 24px;
 }
 
+/* 两列的「项目 / 内容」表：首列给足宽度，别把标签挤成竖排 */
+.tw--kv thead th:first-child,
+.tw--kv tbody td:first-child {
+  width: 7.5em;
+  white-space: nowrap;
+}
+
 /* 列多的表横向越出到整幅，避免中文逐字折行 */
 .ch-body > .tw--wide {
   grid-column: 1 / span 12;
@@ -538,16 +545,21 @@ tbody tr:hover td {
   padding-right: 20px;
 }
 
+.linkreg th:nth-child(2),
+.linkreg td.lg-title {
+  width: 38%;
+}
+
 .linkreg th:last-child,
 .linkreg td:last-child {
-  width: 46%;
+  width: 44%;
   padding-right: 0;
 }
 
 .linkreg .lg-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding-right: 24px;
+  line-height: 1.45;
+  hyphens: auto;
 }
 
 .linkreg .lg-none {
