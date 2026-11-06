@@ -592,6 +592,16 @@ hr.rule {
   color: var(--ink-50);
 }
 
+.colophon__line span {
+  display: inline-block;
+  margin-right: 1.3em;
+  white-space: nowrap;
+}
+
+.colophon__line span:first-child {
+  white-space: normal;
+}
+
 .colophon p:last-child {
   margin-bottom: 0;
 }

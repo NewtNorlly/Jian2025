@@ -384,11 +384,13 @@ ${bodyHtml}
 </main>
 
 <footer class="colophon">
-  <p>源文件 <code class="tok">Jian2025-全库文本与数据总集.md</code>　·　正文 ${fmt(
-    stats.chars
-  )} 字符　·　表 ${fmt(stats.tables)} 张　·　图版 ${fmt(stats.figures)} 处　·　建于 ${new Date()
-    .toISOString()
-    .slice(0, 10)}</p>
+  <p class="colophon__line">
+    <span>源文件 <code class="tok">Jian2025-全库文本与数据总集.md</code></span>
+    <span>正文 ${fmt(stats.chars)} 字符</span>
+    <span>表 ${fmt(stats.tables)} 张</span>
+    <span>图版 ${fmt(stats.figures)} 处</span>
+    <span>建于 ${new Date().toISOString().slice(0, 10)}</span>
+  </p>
   <p>网页版对账户恢复码、学号与本人邮箱地址做了遮蔽处理；其余正文与源文件逐字一致。每次推送由 GitHub Actions 重新构建发布。</p>
 </footer>
 
