@@ -28,7 +28,8 @@ const SCROLL = Number(arg('scroll', 0));
 const FULL = arg('full', false) === true;
 const WAIT = Number(arg('wait', 1500));
 const DPR = Number(arg('dpr', 1));
-const EVAL = arg('eval', null);
+const EVALFILE = arg('evalFile', null);
+const EVAL = arg('eval', null) || (EVALFILE ? require('fs').readFileSync(String(EVALFILE), 'utf8') : null);
 const SEL = arg('sel', null);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -119,7 +120,8 @@ function send(ws, method, params = {}, sessionId) {
 
   if (EVAL) {
     const r = await s('Runtime.evaluate', { expression: EVAL, awaitPromise: true, returnByValue: true });
-    if (r && r.result && r.result.value !== undefined) console.log('EVAL:', JSON.stringify(r.result.value));
+    if (r && r.exceptionDetails) console.log('EVALERR:', JSON.stringify(r.exceptionDetails.exception && r.exceptionDetails.exception.description || r.exceptionDetails.text).slice(0,300));
+    else if (r && r.result && r.result.value !== undefined) console.log('EVAL:', typeof r.result.value === 'string' ? r.result.value : JSON.stringify(r.result.value));
     await sleep(400);
   }
   if (SCROLL) {
