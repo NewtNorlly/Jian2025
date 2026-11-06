@@ -1,10 +1,10 @@
 # Jian2025 · 全库文本与数据总集（网页版）
 
 把 `Jian2025-全库文本与数据总集.md` 排成一条可以自上而下连续阅读的长页。
-正文与 Markdown 源文件逐字对应；每次推送到 `main`，GitHub Actions 自动重建并发布。
+正文与 Markdown 源文件逐字对应（含原文的换行）；每次推送到 `main`，GitHub Actions 自动重建并发布。
 
 - 线上地址：<https://newtnorlly.github.io/Jian2025/>
-- 内容来源：`Jian2025-全库文本与数据总集.md`（唯一事实来源）
+- 内容来源：`Jian2025-全库文本与数据总集.md`（主体）+ `data/微信收藏文章链接表.xlsx`（第 10 章）
 
 ## 版式
 
@@ -15,18 +15,35 @@
 - 任何文字不小于 20px；字号阶梯只有 28 / 24 / 22 / 20 四级
 - 层级靠留白、字重与细线区分，不靠字号跳变
 - 无封面、无导语，第一章即开篇
+- 原文的单行换行照原样保留（构建时 `breaks: true`），账号、目录树一类的分条内容不会被挤成一行
 
 ## 目录结构
 
 ```
-Jian2025-全库文本与数据总集.md   正文源文件
+Jian2025-全库文本与数据总集.md     正文源文件
+data/微信收藏文章链接表.xlsx        第 10 章的数据源
+data/wechat-links.json            由上面那份表格导出的构建输入
 site/swiss.css                    样式
 site/app.js                       进度线 / 当前章 / 右缘刻度
+site/favicon.svg                  站点图标
 tools/build.cjs                   构建器：Markdown → _site/index.html
+tools/import-links.py             把链接表 xlsx 导出成 JSON
 tools/serve.cjs                   本地预览服务器
+tools/shot.cjs                    无头 Chrome 截图（开发自用）
 tools/vendor/markdown-it.min.js   内置解析器（CI 无需 npm install）
 .github/workflows/deploy.yml      Actions：构建 + 发布 Pages
 _site/                            构建产物（不入库）
+```
+
+## 章节
+
+正文由 Markdown 里的 `## 第N章` / `## 附录 X` 决定。第 10 章「微信收藏文章链接表」不属于
+Markdown 正文，由构建器在「附录 A」之前插入，数据来自 `data/wechat-links.json`。
+
+更新链接表：
+
+```bash
+python tools/import-links.py "C:\\Users\\NewtN\\Desktop\\微信收藏文章链接表.xlsx"
 ```
 
 ## 本地使用
@@ -48,19 +65,21 @@ node tools/serve.cjs      # 预览 http://127.0.0.1:8210/
 4. `actions/deploy-pages` 发布到 GitHub Pages
 
 仓库 Settings → Pages → Build and deployment 的 Source 必须是 **GitHub Actions**。
+Pages 侧更新常要 5–10 分钟，所以发布步骤的超时已放宽到 30 分钟。
 
 ## 脱敏
 
-网页版对下列内容做遮蔽（构建时执行，源文件不动）：
+**当前关闭。** 源文档里的账户、恢复码等凭证按指示保持原样（均已失效）。
 
-| 位置 | 处理 |
+构建器里保留了脱敏实现，需要时把 `tools/build.cjs` 顶部 `SITE_CONFIG.redact` 改为 `true` 即可，规则：
+
+| 规则 | 处理 |
 |---|---|
-| 5.4.3 Outlook 备用恢复码（8 组） | 替换为 `██████████` |
-| 6.6 评教脚本中的学号 | 保留首位，其余替换为 `█` |
-| 本人邮箱地址（含恢复密钥文件名） | 替换为 `n█████@域名` |
+| 连续多行的 10 位恢复码 | 替换为 `██████████` |
+| 评教脚本里的学号 | 保留首位，其余替换为 `█` |
+| 本人邮箱地址 | 替换为 `n█████@域名` |
 
-规则集中在 `tools/build.cjs` 的 `redact()` 里，可随时调整。
-页面默认带 `noindex`（不被搜索引擎收录），如需放开，把 `SITE_CONFIG.indexable` 改为 `true`。
+页面默认带 `noindex`（不被搜索引擎收录），如需放开把 `SITE_CONFIG.indexable` 改为 `true`。
 
 ## 许可
 

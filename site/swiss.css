@@ -105,8 +105,13 @@ a:hover {
 }
 
 ::selection {
-  background: var(--ink);
-  color: var(--paper);
+  background: #87ceeb;
+  color: #000000;
+}
+
+::-moz-selection {
+  background: #87ceeb;
+  color: #000000;
 }
 
 .sr-only {
@@ -183,9 +188,9 @@ a:hover {
 
 .progress {
   position: absolute;
-  inset: -1px 0 auto 0;
-  height: 2px;
-  background: transparent;
+  inset: 0 0 auto 0;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .progress span {
@@ -213,28 +218,28 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  height: 26px;
-  padding: 0 14px 0 20px;
+  height: 40px;
+  padding: 0 18px 0 24px;
   border: 0;
 }
 
 .thumb__tick {
   display: block;
-  width: 16px;
-  height: 1px;
-  background: rgba(0, 0, 0, 0.28);
+  width: 34px;
+  height: 2px;
+  background: rgba(0, 0, 0, 0.45);
   transition: width 0.14s var(--ease), background-color 0.14s var(--ease);
 }
 
 .thumb:hover .thumb__tick,
 .thumb:focus-visible .thumb__tick {
-  width: 26px;
+  width: 48px;
   background: var(--ink);
 }
 
 .thumb.is-active .thumb__tick {
-  width: 26px;
-  height: 2px;
+  width: 48px;
+  height: 3px;
   background: var(--red);
 }
 
@@ -507,6 +512,50 @@ th:last-child {
 
 tbody tr:hover td {
   background: var(--tint);
+}
+
+/* 链接登记表：一行一条，长链接单行截断，悬停显示全址 */
+.linkreg {
+  table-layout: fixed;
+}
+
+.linkreg th,
+.linkreg td {
+  border: 0;
+  padding: 1px 16px 1px 0;
+  vertical-align: baseline;
+}
+
+.linkreg thead th {
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 8px;
+}
+
+.linkreg th.num,
+.linkreg td.num {
+  width: 6.5em;
+  color: var(--ink-40);
+  padding-right: 20px;
+}
+
+.linkreg tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.linkreg a {
+  display: block;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkreg tbody tr:hover a {
+  border-bottom-color: var(--ink);
+}
+
+.linkreg tbody tr:hover td {
+  background: transparent;
 }
 
 /* ---------- 12. 行内代码 / 代码块 ---------- */

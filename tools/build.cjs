@@ -26,6 +26,12 @@ const OUT = path.join(ROOT, '_site');
 const SITE_CONFIG = {
   indexable: false, // true 时移除 noindex
   title: 'Jian2025 全库文本与数据总集',
+  /**
+   * 是否对账户恢复码、学号、本人邮箱做遮蔽。
+   * 已按指示关闭：源文档里这些凭证均已失效，保持原文。
+   * 若将来想重新遮蔽，把这里改成 true 即可（规则见下方 redact()）。
+   */
+  redact: false,
 };
 
 const t0 = Date.now();
@@ -60,6 +66,38 @@ function makeSlugger() {
 }
 
 const charCount = (s) => s.replace(/\s/g, '').length;
+
+/* 微信文章链接表（由 tools/import-links.py 从 xlsx 导出） */
+let LINKS_CACHE;
+function loadLinks() {
+  if (LINKS_CACHE !== undefined) return LINKS_CACHE;
+  const p = path.join(ROOT, 'data', 'wechat-links.json');
+  try {
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    LINKS_CACHE = Array.isArray(j.links) && j.links.length ? j : null;
+  } catch {
+    LINKS_CACHE = null;
+  }
+  return LINKS_CACHE;
+}
+
+/** 链接的显示文字：微信文章取 __biz/mid/idx/sn 四项，其余去掉协议头 */
+function linkLabel(u) {
+  try {
+    const url = new URL(u);
+    if (url.hostname === 'mp.weixin.qq.com') {
+      const bits = [];
+      for (const k of ['__biz', 'mid', 'idx', 'sn']) {
+        const v = url.searchParams.get(k);
+        if (v) bits.push(`${k}=${v}`);
+      }
+      if (bits.length) return bits.join('&');
+    }
+    return u.replace(/^https?:\/\//, '');
+  } catch {
+    return u;
+  }
+}
 
 function fmt(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -136,7 +174,7 @@ function preprocess(src) {
 /* ------------------------------------------------------------------ *
  * 3. 解析并改写 token
  * ------------------------------------------------------------------ */
-const md = new MarkdownIt({ html: false, linkify: false, typographer: false, breaks: false });
+const md = new MarkdownIt({ html: false, linkify: false, typographer: false, breaks: true });
 
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const t = tokens[idx];
@@ -193,6 +231,41 @@ function buildSite(source) {
     );
   };
 
+  /* ---- 第 10 章：来自《微信收藏文章链接表.xlsx》（附录 A 之前插入） ---- */
+  const emitLinksChapter = () => {
+    const data = loadLinks();
+    if (!data) return;
+    const title = '微信收藏文章链接表';
+    const id = slug(`第10章 ${title}`);
+    openChapter({ key: 'ch-10', num: '10', title, id });
+    out.push(
+      html(
+        `<p>本章数据取自工作簿 <code class="tok">${esc(data.source)}</code>，` +
+          `共 ${fmt(data.links.length)} 条链接，按表格中的原始顺序排列，未做去重以外的任何改动。` +
+          `每条链接在页面上的显示文字取 <code class="tok">__biz / mid / idx / sn</code> 四项，` +
+          `点击即打开原文。</p>`
+      )
+    );
+    const rows = data.links
+      .map((u, i) => {
+        const n = String(i + 1).padStart(4, '0');
+        return (
+          `<tr><td class="num">${n}</td><td>` +
+          `<a href="${esc(u)}" title="${esc(u)}" target="_blank" rel="noopener noreferrer">` +
+          `${esc(linkLabel(u))}</a></td></tr>`
+        );
+      })
+      .join('');
+    out.push(
+      html(
+        `<div class="tw tw--wide"><table class="linkreg">` +
+          `<thead><tr><th class="num">序号</th><th>链接</th></tr></thead>` +
+          `<tbody>${rows}</tbody></table></div>`
+      )
+    );
+    out.push(html('</div></section>'));
+  };
+
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
 
@@ -217,6 +290,7 @@ function buildSite(source) {
         };
       }
       if (ch) {
+        if (ch.key === 'ch-a') emitLinksChapter();
         openChapter(ch);
         stats.sections++;
         i += 2;
@@ -359,7 +433,8 @@ function buildSite(source) {
 <meta name="description" content="Jian2025 全库文本与数据总集 —— 274 个文本文件的逐份抄录与重排：微信收藏、长桑年度笔记、Outlook 便笺、QQ 收藏。">
 ${SITE_CONFIG.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
 <meta name="color-scheme" content="light">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="alternate icon" href="favicon.ico">
 <link rel="stylesheet" href="assets/swiss.css?v=${vCss}">
 </head>
 <body>
@@ -421,7 +496,7 @@ function main() {
   src = src.slice(startAt);
 
   src = preprocess(src);
-  src = redact(src);
+  if (SITE_CONFIG.redact) src = redact(src);
   log(`读取源文件 ${fmt(before)} 字符，正文自第一章起 ${fmt(src.length)} 字符`);
 
   const { page, chapters, stats } = buildSite(src);
@@ -433,6 +508,9 @@ function main() {
     const p = path.join(SITE, f);
     if (fs.existsSync(p)) fs.copyFileSync(p, path.join(OUT, 'assets', f));
   }
+  // 站点图标放在根目录，配合 <link rel="icon" href="favicon.svg">
+  const fav = path.join(SITE, 'favicon.svg');
+  if (fs.existsSync(fav)) fs.copyFileSync(fav, path.join(OUT, 'favicon.svg'));
   fs.writeFileSync(path.join(OUT, '.nojekyll'), '', 'utf8');
 
   log('脱敏：' + (REDACTION.applied.map((r) => `${r.rule} ×${r.count}`).join('，') || '无'));
